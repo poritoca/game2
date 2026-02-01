@@ -3475,7 +3475,15 @@ if(st.boss){
               const d2 = dx2*dx2 + dy2*dy2;
               if(d2 <= (b.chainR*b.chainR) && d2 < bestD){ bestD=d2; best=ee; }
             }
-            if(best){
+                        // also allow chaining to boss (boss is stored separately from st.enemies)
+            if(st.boss && st.boss!==e && st.boss.hp>0){
+              const dx2 = st.boss.x - e.x;
+              const dy2 = st.boss.y - e.y;
+              const d2 = dx2*dx2 + dy2*dy2;
+              if(d2 <= (b.chainR*b.chainR) && d2 < bestD){ bestD=d2; best=st.boss; }
+            }
+
+if(best){
               const mul = num(b.chainMul, 0.65);
               best.hp -= b.dmg * mul;
               this.dsAddScore(8);
@@ -3511,6 +3519,25 @@ if(st.boss){
         if(hit){
           e.hp -= b.dmg;
           this.dsAddScore(18);
+          // Ricochet chain: if the bullet hits the boss first, allow the bounce to jump to a nearby normal enemy.
+          if(b.chain && b.chainR){
+            let best=null, bestD=1e9;
+            for(const ee of st.enemies){
+              if(!ee) continue;
+              const dx2 = ee.x - e.x;
+              const dy2 = ee.y - e.y;
+              const d2 = dx2*dx2 + dy2*dy2;
+              if(d2 <= (b.chainR*b.chainR) && d2 < bestD){ bestD=d2; best=ee; }
+            }
+            if(best){
+              const mul = num(b.chainMul, 0.65);
+              best.hp -= b.dmg * mul;
+              this.dsAddScore(8);
+            }
+            b.chain = 0;
+          }
+
+
           if(!b.pierce && !b.laser) st.bullets.splice(j,1);
         }
       }
@@ -3866,7 +3893,9 @@ dsFire(unit){
     const decay = clamp(0.78 - lv*0.010, 0.50, 0.78);    // per-hop damage decay
 
     const enemies = Array.isArray(st.enemies)?st.enemies:[];
-    if(!enemies.length) return;
+    const candidates = enemies.slice();
+    if(st.boss) candidates.push(st.boss);
+    if(!candidates.length) return;
 
     const used = new Set();
     const segs = [];
@@ -3874,7 +3903,7 @@ dsFire(unit){
     const findNearest = (cx,cy,rad)=>{
       let best=null, bestD=1e9;
       const rr2 = rad*rad;
-      for(const e of enemies){
+      for(const e of candidates){
         if(!e || e.hp<=0) continue;
         if(used.has(e)) continue;
         const dx = e.x - cx, dy = e.y - cy;
