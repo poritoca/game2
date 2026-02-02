@@ -2451,6 +2451,7 @@ const exit = btn('dsExit');
       weaponLock: {on:false, w:null, xp:0},
       rocks: [],
       rockAcc: 0,
+      rockTarget: 8,
       // tx/ty: canvas drag target (only active while dragging)
       input: {ax:0, ay:0},
       player: {x:0.5, y:0.88, sp:0.62, spMul:1, hitMul:1, cd:0, weapon:'N', shield:0},
@@ -2475,6 +2476,16 @@ const exit = btn('dsExit');
       explosions: [],
     };
     this._ds = st;
+
+    // init rocks to target count (rocks do not ramp up over time)
+    try{
+      st.rocks = Array.isArray(st.rocks)?st.rocks:[];
+      const t = clamp(num(st.rockTarget,8), 3, 12);
+      st.rockTarget = t;
+      while(st.rocks.length < t){ this.dsSpawnRock(); }
+      if(st.rocks.length > t) st.rocks.length = t;
+    }catch(e){}
+
 
     const over = $("#dsOver");
     if(over) over.style.display='none';
@@ -2747,18 +2758,19 @@ const exit = btn('dsExit');
     return {perma, lastCarry: perma.lastCarry};
   }
 
-  dsShowGameOverCarry(lastCarry, bossKillsRun){
+  dsShowGameOverCarry(lastCarry, carryN, bossKillsRun){
     try{
       const box = document.getElementById('dsCarryBox');
       const list = document.getElementById('dsCarryList');
       const title = document.getElementById('dsCarryTitle');
       if(!box || !list) return;
       lastCarry = Array.isArray(lastCarry)?lastCarry:[];
+      carryN = clamp(num(carryN,0), 0, 999);
       bossKillsRun = clamp(num(bossKillsRun,0), 0, 999);
 
       box.style.display = 'block';
       if(title){
-        title.textContent = bossKillsRun>0 ? `PERMA CARRY ×${bossKillsRun}` : 'PERMA CARRY';
+        title.textContent = bossKillsRun>0 ? `PERMA CARRY ×${carryN} (boss ${bossKillsRun})` : 'PERMA CARRY';
       }
 
       list.innerHTML = '';
@@ -2990,15 +3002,17 @@ dsIncWeaponLv(w, add=1){
     try{
       if(!backToMenu && (isFinite(st.lives)?st.lives:1) <= 0){
         const bossKills = clamp(num(st.bossKillsRun,0), 0, 999);
+        // perma-carry count increases after the 2nd boss: 1 + 2 + ... + bossKills
+        const carryN = clamp(Math.floor(bossKills*(bossKills+1)/2), 0, 999);
         const pool = this.dsBuildCarryPool(st.runGrowth);
-        const picked = this.dsPickCarry(pool, bossKills, {avoidImmediateRepeat:true});
+        const picked = this.dsPickCarry(pool, carryN, {avoidImmediateRepeat:true});
         const curPerma = st.perma || this.dsLoadPerma();
         const applied = this.dsApplyCarryToPerma(curPerma, picked);
         st.perma = applied.perma;
         this.dsSavePerma(st.perma);
-        this.dsShowGameOverCarry(applied.lastCarry, bossKills);
+        this.dsShowGameOverCarry(applied.lastCarry, carryN, bossKills);
       }else{
-        this.dsShowGameOverCarry([], 0);
+        this.dsShowGameOverCarry([], 0, 0);
       }
     }catch(e){}
 
@@ -3289,6 +3303,9 @@ if(st.boss){
     const st=this._ds; if(!st) return;
     const dt0 = (typeof dt!=='undefined' && isFinite(dt)) ? dt : 0;
     st.t += dt0*1000;
+    // rocks update guard (avoid duplicate update blocks)
+    st.__rocksDone = false;
+
     st.bossRespawnCd = Math.max(0, num(st.bossRespawnCd,0) - dt0);
 
     // difficulty ramps (endless)
@@ -3401,6 +3418,12 @@ const rateFor = (w)=>{
 // We keep existing rocks (if any) moving/wrapping, but we do not spawn new ones here.
 st.rocks = Array.isArray(st.rocks)?st.rocks:[];
 st.rockAcc = (isFinite(st.rockAcc)?st.rockAcc:0) + dt0;
+// keep rock count constant (no ramp-up)
+const __rockTarget = clamp(num(st.rockTarget, 8), 3, 12);
+st.rockTarget = __rockTarget;
+while(st.rocks.length < __rockTarget){ this.dsSpawnRock(); }
+if(st.rocks.length > __rockTarget) st.rocks.length = __rockTarget;
+st.__rocksDone = true;
 // update rocks drift (wrap)
 for(const r of st.rocks){
   r.t = (r.t||0) + dt0;
@@ -4748,7 +4771,15 @@ dsFire(unit){
       e.phase = Math.random()*Math.PI*2;
     }
 
-    st.enemies.push(e);
+    
+
+    // gradual enemy HP ramp (time-based), so late swarms stay meaningful
+    try{
+      const hpMul = this.dsEnemyHpMul();
+      e.hp = Math.max(1, Math.floor(num(e.hp,1) * hpMul));
+      e.maxHp = Math.max(e.hp, Math.floor(num(e.maxHp, num(e.hp,1)) * hpMul));
+    }catch(err){}
+st.enemies.push(e);
   }
 
   // --- DOT SHOOT: indestructible neon rock obstacles ---
@@ -5087,6 +5118,26 @@ dsFire(unit){
     return clamp(num(c.bonus,0), 0, num(DOTSTRIKE_TUNING?.clutch?.max, 1.0));
   }
 
+  // Drop multiplier that decreases over time/difficulty so "items per time" stays near the early-game baseline.
+  dsDropTimeMul(){
+    const st=this._ds; if(!st) return 1;
+    const dif = num(st.dif,0);
+    // scale by difficulty (mostly time-driven), keep a floor so drops never become zero
+    return clamp(1 / (1 + dif*0.085), 0.25, 1.0);
+  }
+
+  // Enemy HP multiplier that ramps up gradually over time so late-game swarms don't become trivial.
+  dsEnemyHpMul(){
+    const st=this._ds; if(!st) return 1;
+    const tSec = num(st.t,0) / 1000;
+    const dif = num(st.dif,0);
+    // + up to ~+80% from time (first ~8 minutes), plus a small difficulty factor.
+    const timeBoost = clamp(tSec / 480, 0, 0.80);
+    const difBoost  = clamp(dif * 0.018, 0, 0.65);
+    return clamp(1 + timeBoost + difBoost, 1, 3.0);
+  }
+
+
   dsTriggerClutch(x,y){
     const st=this._ds; if(!st) return;
     st.rings = Array.isArray(st.rings)?st.rings:[];
@@ -5159,7 +5210,8 @@ dsFire(unit){
     // ---- base drop chance (normal reduced to 20%) + clutch bonus ----
     const base = isBoss ? num(DOTSTRIKE_TUNING?.drop?.baseBoss, 0.85) : num(DOTSTRIKE_TUNING?.drop?.baseNormal, 0.20);
     const clutch = this.dsGetClutchBonus(); // 0..1 (adds to chance and score)
-    const chance = clamp(base + clutch, 0, 1);
+    const timeMul = this.dsDropTimeMul();
+    const chance = clamp((base + clutch) * timeMul, 0, 1);
     if(Math.random() > chance) return;
 
     const r = Math.random();
@@ -6236,14 +6288,16 @@ if(Array.isArray(st.rocks) && st.rocks.length){
     }
 
 // rocks (indestructible neon obstacles; increase over time)
-st.rocks = Array.isArray(st.rocks)?st.rocks:[];
-st.rockAcc = (isFinite(st.rockAcc)?st.rockAcc:0) + dtR;
-const rockIntv = Math.max(0.85, 4.20 - st.dif*0.08);
-const rockCap = Math.min(28, 6 + Math.floor(st.dif*0.55));
-while(st.rockAcc >= rockIntv && st.rocks.length < rockCap){
-  st.rockAcc -= rockIntv;
-  this.dsSpawnRock();
+if(!st.__rocksDone){
+  st.rocks = Array.isArray(st.rocks)?st.rocks:[];
+  // keep rock count constant (no ramp-up)
+  const __rockTarget2 = clamp(num(st.rockTarget, 8), 3, 12);
+  st.rockTarget = __rockTarget2;
+  while(st.rocks.length < __rockTarget2){ this.dsSpawnRock(); }
+  if(st.rocks.length > __rockTarget2) st.rocks.length = __rockTarget2;
+  st.__rocksDone = true;
 }
+if(!st.__rocksDone){
 // update rocks drift (wrap)
 for(const r of st.rocks){
   r.t = (r.t||0) + dtR;
@@ -6255,6 +6309,7 @@ for(const r of st.rocks){
     r.y = -0.18 - Math.random()*0.22;
     r.x = 0.10 + Math.random()*0.80;
   }
+}
 }
 
 // boss
