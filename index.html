@@ -95,6 +95,15 @@ body::before{
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
 .grid3x3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
 .pad,.act{padding:8px 0;border-radius:8px;border:1px solid #1f2833;background:#12171e;text-align:center;font-size:16px;line-height:1}
+/* D-pad: make it extremely transparent (keep touch area) */
+.pad{
+  background: rgba(18,23,30,0.03) !important;
+  border-color: rgba(31,40,51,0.06) !important;
+  color: rgba(255,255,255,0.12) !important;
+  box-shadow: none !important;
+}
+.pad:active{filter:none !important; background: rgba(120,150,220,0.06) !important;}
+
 .act.accent{background:var(--accent);border-color:var(--accent2);color:var(--good)}
 @media(max-width:760px){
   #viewport{font-size:18px}
@@ -635,6 +644,13 @@ button, .pad, .act, .btn { touch-action: manipulation; }
   flex-wrap:wrap;
 }
 .dsSplashBtns .dsBtn{ min-width:120px; }
+.dsPermaPanel{ margin-top:12px; padding:10px 10px 8px; border-radius:14px; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.18); }
+.dsPermaTitle{ font-weight:800; letter-spacing:0.06em; font-size:13px; margin-bottom:6px; opacity:0.92; }
+.dsPermaList{ display:flex; flex-wrap:wrap; gap:6px 8px; }
+.dsPermaPill{ display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.10); font-size:12px; }
+.dsPermaPill b{ font-weight:900; }
+.dsPermaEmpty{ font-size:12px; opacity:0.70; padding:6px 2px; }
+
 .dotShootInner{
   position:relative;
   padding:12px 12px 14px;
@@ -657,7 +673,7 @@ button, .pad, .act, .btn { touch-action: manipulation; }
   height:auto;
   border-radius:12px;
   border:1px solid rgba(255,255,255,0.14);
-  background:rgba(0,0,0,0.25);
+  background:rgba(0,0,0,0.04);
   image-rendering: pixelated;
   display:block;
   margin:0 auto;
@@ -721,9 +737,18 @@ button, .pad, .act, .btn { touch-action: manipulation; }
   z-index:10000;
   pointer-events:auto;
 }
+
+      /* Bomb button: move to bottom-right */
+      #dsBombBtn{
+        position: fixed !important;
+        right: 12px !important;
+        bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+        z-index: 11000 !important;
+      }
+
 .dsIconBtn{
-  width:56px;
-  height:56px;
+  width:58px;
+  height:64px;
   border-radius:18px;
   border:1px solid rgba(255,255,255,0.18);
   background:rgba(20,26,34,0.55);
@@ -731,18 +756,28 @@ button, .pad, .act, .btn { touch-action: manipulation; }
   font-size:22px;
   font-weight:900;
   display:flex;
+  flex-direction:column;
+  gap:2px;
   align-items:center;
   justify-content:center;
+  line-height:1;
   padding:0;
   touch-action:manipulation;
 }
+.dsIconBtn::after{
+  content:attr(data-label);
+  font-size:10px;
+  font-weight:800;
+  opacity:0.86;
+  letter-spacing:0.02em;
+}
 .dsIconBtn:active{ transform:scale(0.98); }
-.dsIconTiny{ font-size:16px; letter-spacing:0.5px; }
+.dsIconTiny{ font-size:18px; letter-spacing:0.5px; }
 .dsIconDanger{ background:rgba(60,10,18,0.55); border-color:rgba(255,120,150,0.22); }
 
 @media (max-width:420px){
   .dsBtnBar{ right:8px; top:calc(8px + env(safe-area-inset-top)); gap:9px; }
-  .dsIconBtn{ width:54px; height:54px; border-radius:16px; }
+  .dsIconBtn{ width:56px; height:62px; border-radius:16px; }
 }
 
 
@@ -910,6 +945,15 @@ button, .pad, .act, .btn { touch-action: manipulation; }
 }
 #dsOver .panel .row{
   display:flex;
+#dsCarryBox .dsCarryItem{
+  padding:6px 8px;
+  border-radius:10px;
+  margin:6px 0;
+  background: linear-gradient(90deg, rgba(80,220,255,0.14), rgba(200,80,255,0.10));
+  border:1px solid rgba(255,255,255,0.10);
+  font-weight:700;
+}
+
   justify-content:center;
   gap:10px;
   flex-wrap:wrap;
@@ -944,7 +988,12 @@ button, .pad, .act, .btn { touch-action: manipulation; }
 	        <div class="dsSplashHi">HI SCORE <b id="dsHiSplash">0</b></div>
 	        <div class="dsSplashBtns">
 	          <button class="dsBtn dsBtnAccent dsBig" id="dsStartGameBtn">START</button>
+          <button class="dsBtn" id="dsResetPermaBtn">引き継ぎリセット</button>
 </div>
+          <div class="dsPermaPanel" id="dsPermaPanel">
+            <div class="dsPermaTitle">これまでの永続成長</div>
+            <div class="dsPermaList" id="dsPermaList"></div>
+          </div>
 	        <div class="dim" style="margin-top:10px;">ハイスコア保存：ON</div>
 	      </div>
 	    </div>
@@ -972,17 +1021,23 @@ button, .pad, .act, .btn { touch-action: manipulation; }
             </div>
 
             <div id="dsBtnBar" class="dsBtnBar" aria-label="controls">
-                            <button class="dsIconBtn" id="dsBombBtn" title="BOMB">💣</button>
-              <button class="dsIconBtn dsIconTiny" id="dsPause" title="PAUSE">⏸</button>
-              <button class="dsIconBtn dsIconTiny" id="dsCineToggle" title="SLOW">S✓</button>
-              <button class="dsIconBtn dsIconDanger" id="dsExit" title="TITLE">⌂</button>
+                            <button class="dsIconBtn" id="dsBombBtn" title="BOMB" data-label="ボム">💣</button>
+              <button class="dsIconBtn dsIconTiny" id="dsPause" title="PAUSE" data-label="停止">⏸</button>
+<button class="dsIconBtn dsIconTiny" id="dsWeaponLock" title="WEAPON LOCK" data-label="固定">🔓</button>
+              <button class="dsIconBtn dsIconTiny" id="dsPickLock" title="PICK & LOCK" data-label="選択">🎯</button>
+              <button class="dsIconBtn dsIconDanger" id="dsExit" title="TITLE" data-label="戻る">⌂</button>
             </div>
           </div>
 <div id="dsOver">
 	        <div class="panel">
 	          <div style="font-weight:800;font-size:16px;margin-bottom:4px;">GAME OVER</div>
 	          <div class="dim">スコアは保存されます</div>
-	          <div class="row">
+	          
+          <div id="dsCarryBox" style="display:none;margin-top:12px;padding:10px;border-radius:12px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.22);text-align:left;">
+            <div id="dsCarryTitle" style="font-weight:800;letter-spacing:0.08em;margin-bottom:6px;">PERMA CARRY</div>
+            <div id="dsCarryList"></div>
+          </div>
+          <div class="row">
 	            <button class="dsBtn dsBtnAccent" id="dsRetry">RETRY</button>
 	            <button class="dsBtn dsBtnDanger" id="dsExit2">TITLE</button>
 	          </div>

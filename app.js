@@ -38,6 +38,7 @@ const DOTSTRIKE_TUNING = {
       heal:    0.030,     // Y (heal)
       tiny:    0.050,     // T
       inv:     0.0005,    // I: SUPER SUPER rare
+      maxHpUp: 0.0005, // U: SUPER SUPER rare (max HP)
       missile: 0.040,     // a/w/h
       spread:  0.10,      // S
       pierce:  0.05,      // L
@@ -48,8 +49,7 @@ const DOTSTRIKE_TUNING = {
       // G/R/C were hard to see after overall drop nerf, so make them a bit more common.
       heavyBomb:0.020,  // G
       saw:     0.020,  // R
-      ricochet:0.015,  // C
-      bomb:    0.025,     // B     // B
+      ricochet:0.015,  // C\n      rockPush: 0.012, // J (rock pusher)\n      rockSplit:0.010, // K (rock splitter)\n      rockHoming:0.010, // M (rock homing)\n      bomb:    0.025,     // B     // B
       // droneAdd: computed dynamically
       droneAddBase: 0.06,  // base for O (dynamic)
       droneAddExtra:0.06,  // extra scaled by (1 - dlen/8)
@@ -60,6 +60,7 @@ const DOTSTRIKE_TUNING = {
       barrier: 0.050,     // A: rare (still possible)
       droneAdd: 0.070,    // O
       inv:     0.0020,    // I: SUPER SUPER rare even on boss
+      maxHpUp: 0.0020, // U: SUPER SUPER rare (max HP)
       missile: 0.145,     // a/w/h
       tiny:    0.24,      // T
       speed:   0.12,      // P
@@ -71,8 +72,7 @@ const DOTSTRIKE_TUNING = {
       pierce:  0.020,     // L
       heavyBomb:0.060,  // G
       saw:     0.055,  // R
-      ricochet:0.045,  // C
-      spreadOrBomb: 0.015 // S/B fallback
+      ricochet:0.045,  // C\n      rockPush: 0.030, // J\n      rockSplit:0.025, // K\n      rockHoming:0.025, // M\n      spreadOrBomb: 0.015 // S/B fallback
     }
   }
 };
@@ -209,6 +209,7 @@ const LS_PUNYO_HS = 'punyopunyoHigh_v1';
 const LS_PUNYO_SCORES = 'punyopunyoScores_v1';
 const LS_DOTSHOOT_HS = 'dotshootHigh_v1';
 const LS_DOTSHOOT_SCORES = 'dotshootScores_v1';
+const LS_DOTSTRIKE_PERMA = "dotstrikePerma_v1";
 const LS_GLOBAL_GOLD = 'townGlobalGold_v1';
 const LS_TOWN_STORAGE_BAK = 'townStorage_bak_v1';
 const LS_TOWN_LOSTFOUND_BAK = 'townLostFound_bak_v1';
@@ -2096,6 +2097,7 @@ ppOpenScoreBookWindow(){
     const hs = this.getDotShootHighScore();
     const a=$("#dsHiSplash"); if(a) a.textContent=String(hs);
     const b=$("#dsHiNow");   if(b) b.textContent=String(hs);
+    this.dsRenderPermaSplash();
   }
 
   dsHideSplash(){
@@ -2151,6 +2153,20 @@ ppOpenScoreBookWindow(){
     // DotShooter standalone title buttons
     const splashStart = btn('dsStartGameBtn');
     if(splashStart) bindTap(splashStart, ()=>{ this.openDotShooter(); });
+
+
+    const resetPerma = btn('dsResetPermaBtn');
+    if(resetPerma) bindTap(resetPerma, ()=>{
+      // confirm to prevent accidental reset
+      if(!window.confirm('永続成長（引き継ぎ）をリセットしますか？\n※この操作は取り消せません')) return;
+      this.dsResetPerma();
+      // refresh splash label
+      try{
+        if(this._ds) this._ds.perma = this.dsPermaDefault();
+        this.dsShowSplash(true);
+      }catch(e){}
+      this.dsAddToast('引き継ぎをリセットしました');
+    });
 
 
     const holdBtn = (el, on, off)=>{
@@ -2322,7 +2338,43 @@ ppOpenScoreBookWindow(){
     }
 
 
-    const exit = btn('dsExit');
+    const wlock = btn('dsWeaponLock');
+    if(wlock){
+      const updateLabel = ()=>{
+        const st = this._ds;
+        const on = !!(st && st.weaponLock && st.weaponLock.on);
+        wlock.textContent = on ? '🔒' : '🔓';
+        wlock.classList.toggle('dsBtnOn', on);
+      };
+      bindTap(wlock, ()=>{
+        if(!this._ds || !this._ds.running) return;
+        this.dsToggleWeaponLock();
+        updateLabel();
+      });
+      setTimeout(updateLabel, 0);
+    }
+
+
+    
+    const pick = btn('dsPickLock');
+    if(pick){
+      // Pause + pick a weapon, and keep "weapon lock" until death.
+      // While this mode is active, score is reduced by 20%.
+      const updatePickLabel = ()=>{
+        const st = this._ds;
+        const on = !!(st && st.pickLockMode && st.pickLockMode.on);
+        pick.textContent = on ? '🎯' : '🎯';
+        pick.classList.toggle('dsBtnOn', on);
+      };
+      bindTap(pick, ()=>{
+        if(!this._ds || !this._ds.running) return;
+        this.dsOpenPickLockMenu();
+        updatePickLabel();
+      });
+      setTimeout(updatePickLabel, 0);
+    }
+
+const exit = btn('dsExit');
     if(exit) bindTap(exit, ()=>{ this.dsEndRun(true); });
     const exit2 = btn('dsExit2');
     if(exit2) bindTap(exit2, ()=>{ this.dsEndRun(true); });
@@ -2369,6 +2421,8 @@ ppOpenScoreBookWindow(){
       t: 0,
       lastTs: 0,
       score: 0,
+      scoreMul: 1,
+      pickLockMode: {on:false},
       wave: 0,
       dif: 0,
       livesMax: 3,
@@ -2393,7 +2447,8 @@ ppOpenScoreBookWindow(){
       pendingMissiles: [],
       droneInvAll: false,
       bossN: 0,
-      weaponLv: {N:1,S:0,L:0,H:0,Q:0,Z:0,E:0},
+      weaponLv: {N:1,S:0,L:0,H:0,Q:0,Z:0,E:0,G:0,R:0,C:0,J:0,K:0,M:0},
+      weaponLock: {on:false, w:null, xp:0},
       rocks: [],
       rockAcc: 0,
       // tx/ty: canvas drag target (only active while dragging)
@@ -2409,9 +2464,15 @@ ppOpenScoreBookWindow(){
       boss: null,
       spawnAcc: 0,
       nextBossAt: 9000,
+      bossRespawnCd: 0,
       stars: Array.from({length:40}, ()=>({x:Math.random(), y:Math.random(), s:0.2+Math.random()*0.8})),
       cv, ctx,
       maxObjs: 240,
+      // perma growth (saved)
+      perma: this.dsLoadPerma(),
+      bossKillsRun: 0,
+      runGrowth: {weaponLvUp:{}, missileLvUp:{a:0,w:0,h:0}, maxHpUp:0},
+      explosions: [],
     };
     this._ds = st;
 
@@ -2427,21 +2488,331 @@ ppOpenScoreBookWindow(){
   }
 
 
+  // === DOTSTRIKE Perma Growth (saved across runs) ===
+  dsPermaDefault(){
+    return {
+      v: 1,
+      updatedAt: Date.now(),
+      weaponLvBonus: {N:0,S:0,L:0,H:0,Q:0,Z:0,E:0,G:0,R:0,C:0,J:0,K:0,M:0},
+      missileLvBonus: {a:0,w:0,h:0},
+      maxHpBonus: 0,
+      lastCarry: []
+    };
+  }
+  dsWeaponKeyLabel(k){
+    k = String(k||'').toUpperCase();
+    return (k==='N'?'NORMAL':
+      k==='S'?'SPREAD':
+      k==='L'?'PIERCE':
+      k==='H'?'HOMING':
+      k==='Q'?'NEAR-HOM':
+      k==='Z'?'LASER':
+      k==='E'?'ERASER':
+      k==='G'?'HEAVY-BOMB':
+      k==='R'?'SAW':
+      k==='C'?'RICOCHET':
+      k==='J'?'ROCK-PUSH':
+      k==='K'?'ROCK-SPLIT':
+      k==='M'?'ROCK-HOM':'?');
+  }
+
+  dsPermaToPills(perma){
+    perma = (perma && typeof perma==='object') ? perma : this.dsPermaDefault();
+    const pills = [];
+
+    const w = Object.assign({}, this.dsPermaDefault().weaponLvBonus, perma.weaponLvBonus||{});
+    const keys = Object.keys(w);
+    keys.sort();
+    for(const k of keys){
+      const v = num(w[k],0);
+      if(v>0){
+        pills.push({label:`武器 ${this.dsWeaponKeyLabel(k)}`, val:`+${v}`});
+      }
+    }
+
+    const m = Object.assign({}, this.dsPermaDefault().missileLvBonus, perma.missileLvBonus||{});
+    const mKeys = Object.keys(m);
+    mKeys.sort();
+    for(const k of mKeys){
+      const v = num(m[k],0);
+      if(v>0){
+        pills.push({label:`MISSILE ${String(k).toUpperCase()}`, val:`+${v}`});
+      }
+    }
+
+    const hp = num(perma.maxHpBonus,0);
+    if(hp>0){
+      pills.push({label:`最大HP`, val:`+${hp}`});
+    }
+
+    return pills;
+  }
+
+  dsRenderPermaSplash(){
+    try{
+      const list = document.getElementById('dsPermaList');
+      if(!list) return;
+      const p = this.dsLoadPerma();
+      const pills = this.dsPermaToPills(p);
+      list.innerHTML = '';
+      if(!pills.length){
+        const d = document.createElement('div');
+        d.className = 'dsPermaEmpty';
+        d.textContent = 'まだ永続成長がありません（ボス撃破で抽選）';
+        list.appendChild(d);
+        return;
+      }
+      for(const it of pills){
+        const d = document.createElement('div');
+        d.className = 'dsPermaPill';
+        // safe: values are controlled; still avoid HTML injection
+        d.textContent = `${it.label} ${it.val}`;
+        const b = document.createElement('b');
+        // style already in CSS; keep as part of pill
+        // (we used textContent, so just append)
+      }
+      // re-render with <b> styling by building nodes
+      list.innerHTML = '';
+      for(const it of pills){
+        const d = document.createElement('div');
+        d.className = 'dsPermaPill';
+        const t = document.createElement('span');
+        t.textContent = it.label + ' ';
+        const bb = document.createElement('b');
+        bb.textContent = it.val;
+        d.appendChild(t);
+        d.appendChild(bb);
+        list.appendChild(d);
+      }
+    }catch(e){}
+  }
+
+
+
+  dsLoadPerma(){
+    try{
+      const raw = localStorage.getItem(LS_DOTSTRIKE_PERMA);
+      if(!raw) return this.dsPermaDefault();
+      const obj = JSON.parse(raw);
+      const d = this.dsPermaDefault();
+      if(!obj || typeof obj!=='object') return d;
+      // sanitize
+      const wl = Object.assign({}, d.weaponLvBonus, obj.weaponLvBonus||{});
+      const ml = Object.assign({}, d.missileLvBonus, obj.missileLvBonus||{});
+      const mh = clamp(num(obj.maxHpBonus, 0), 0, 999);
+      const lc = Array.isArray(obj.lastCarry) ? obj.lastCarry.slice(0, 24) : [];
+      return {
+        v: 1,
+        updatedAt: num(obj.updatedAt, Date.now()),
+        weaponLvBonus: wl,
+        missileLvBonus: ml,
+        maxHpBonus: mh,
+        lastCarry: lc
+      };
+    }catch(e){
+      return this.dsPermaDefault();
+    }
+  }
+
+  dsSavePerma(perma){
+    try{
+      if(!perma || typeof perma!=='object') perma = this.dsPermaDefault();
+      perma.updatedAt = Date.now();
+      localStorage.setItem(LS_DOTSTRIKE_PERMA, JSON.stringify(perma));
+    }catch(e){
+      // ignore
+    }
+  }
+
+  dsResetPerma(){
+    try{ localStorage.removeItem(LS_DOTSTRIKE_PERMA); }catch(e){}
+    try{
+      if(this._ds) this._ds.perma = this.dsPermaDefault();
+    }catch(e){}
+  }
+
+  dsWeaponNameJA(t){
+    t = String(t||'').toUpperCase();
+    return t==='S'?'拡散':
+           t==='L'?'貫通':
+           t==='H'?'ホーミング':
+           t==='Q'?'近ホーミング':
+           t==='Z'?'レーザー':
+           t==='E'?'弾消去':
+           t==='G'?'鈍重爆弾':
+           t==='R'?'ノコ刃':
+           t==='C'?'跳弾ビーム':
+           t==='J'?'岩押し':
+           t==='K'?'岩拡散':
+           t==='M'?'岩反射追尾':
+           t==='N'?'ノーマル': t;
+  }
+
+  // Effective weapon level = run weaponLv + perma bonus
+  dsGetWeaponLvEff(w){
+    const st=this._ds;
+    const base = this.dsGetWeaponLv(w);
+    const bonus = clamp(num(st?.perma?.weaponLvBonus?.[w], 0), 0, 999);
+    return clamp(base + bonus, 0, 60);
+  }
+
+  dsGetMissileLvEff(k){
+    const st=this._ds;
+    k = String(k||'a');
+    const base = num(st?.missileLv?.[k], 0);
+    const bonus = clamp(num(st?.perma?.missileLvBonus?.[k], 0), 0, 999);
+    return clamp(base + bonus, 0, 9);
+  }
+
+  // Build pool from THIS RUN only (runGrowth); temporary buffs are never recorded here.
+  dsBuildCarryPool(runGrowth){
+    const pool = [];
+    if(!runGrowth || typeof runGrowth!=='object') return pool;
+
+    const wl = runGrowth.weaponLvUp || {};
+    for(const k of Object.keys(wl)){
+      const n = clamp(num(wl[k], 0), 0, 999);
+      for(let i=0;i<n;i++){
+        pool.push({kind:'weaponLv', key:k, label: `${this.dsWeaponNameJA(k)} Lv+1`});
+      }
+    }
+
+    const ml = runGrowth.missileLvUp || {};
+    for(const k of Object.keys(ml)){
+      const n = clamp(num(ml[k], 0), 0, 999);
+      for(let i=0;i<n;i++){
+        pool.push({kind:'missileLv', key:k, label: `ミサイル(${k}) Lv+1`});
+      }
+    }
+
+    const mh = clamp(num(runGrowth.maxHpUp, 0), 0, 999);
+    for(let i=0;i<mh;i++){
+      pool.push({kind:'maxHp', key:null, label:'最大HP +1'});
+    }
+
+    return pool;
+  }
+
+  dsPickCarry(pool, n, opts={}){
+    pool = Array.isArray(pool)?pool:[];
+    n = clamp(num(n,0), 0, 999);
+    if(!pool.length || n<=0) return [];
+    const picked = [];
+    const avoidRepeat = (opts && opts.avoidImmediateRepeat!==false);
+    let lastKey = null;
+
+    for(let i=0;i<n;i++){
+      if(!pool.length) break;
+      let tries = 0;
+      let cand = null;
+      while(tries < 8){
+        cand = pool[(Math.random()*pool.length)|0];
+        const k = cand ? (cand.kind+':'+String(cand.key)) : null;
+        if(!avoidRepeat || !lastKey || k!==lastKey) break;
+        tries++;
+      }
+      if(!cand) break;
+      const key = cand.kind+':'+String(cand.key);
+      picked.push(cand);
+      lastKey = key;
+    }
+    return picked;
+  }
+
+  dsApplyCarryToPerma(perma, picked){
+    perma = (perma && typeof perma==='object') ? perma : this.dsPermaDefault();
+    picked = Array.isArray(picked)?picked:[];
+
+    perma.weaponLvBonus = Object.assign({}, this.dsPermaDefault().weaponLvBonus, perma.weaponLvBonus||{});
+    perma.missileLvBonus = Object.assign({}, this.dsPermaDefault().missileLvBonus, perma.missileLvBonus||{});
+
+    const lastCarry = [];
+    for(const it of picked){
+      if(!it) continue;
+      if(it.kind==='weaponLv'){
+        const k = String(it.key||'').toUpperCase();
+        perma.weaponLvBonus[k] = num(perma.weaponLvBonus[k],0) + 1;
+        lastCarry.push({kind:'weaponLv', key:k, label: it.label});
+      }else if(it.kind==='missileLv'){
+        const k = String(it.key||'a');
+        perma.missileLvBonus[k] = num(perma.missileLvBonus[k],0) + 1;
+        lastCarry.push({kind:'missileLv', key:k, label: it.label});
+      }else if(it.kind==='maxHp'){
+        perma.maxHpBonus = num(perma.maxHpBonus,0) + 1;
+        lastCarry.push({kind:'maxHp', key:null, label: it.label});
+      }
+    }
+
+    perma.lastCarry = lastCarry.slice(0, 24);
+    return {perma, lastCarry: perma.lastCarry};
+  }
+
+  dsShowGameOverCarry(lastCarry, bossKillsRun){
+    try{
+      const box = document.getElementById('dsCarryBox');
+      const list = document.getElementById('dsCarryList');
+      const title = document.getElementById('dsCarryTitle');
+      if(!box || !list) return;
+      lastCarry = Array.isArray(lastCarry)?lastCarry:[];
+      bossKillsRun = clamp(num(bossKillsRun,0), 0, 999);
+
+      box.style.display = 'block';
+      if(title){
+        title.textContent = bossKillsRun>0 ? `PERMA CARRY ×${bossKillsRun}` : 'PERMA CARRY';
+      }
+
+      list.innerHTML = '';
+      if(!lastCarry.length){
+        const d = document.createElement('div');
+        d.className = 'dsCarryItem dim';
+        d.textContent = (bossKillsRun>0) ? '引き継げる成長がありません' : 'ボス撃破で引き継ぎ抽選';
+        list.appendChild(d);
+        return;
+      }
+
+      lastCarry.forEach((it, idx)=>{
+        const d = document.createElement('div');
+        d.className = 'dsCarryItem';
+        d.textContent = `+ ${it.label || ''}`;
+        d.style.opacity = '0';
+        d.style.transform = 'translateY(6px)';
+        list.appendChild(d);
+        setTimeout(()=>{
+          d.style.transition = 'opacity 260ms ease, transform 260ms ease';
+          d.style.opacity = '1';
+          d.style.transform = 'translateY(0)';
+        }, 60 + idx*90);
+      });
+    }catch(e){}
+  }
+
+
+
 
 dsGetWeaponLv(w){
   const st=this._ds;
   if(!st) return 1;
-  if(!st.weaponLv) st.weaponLv = {N:1,S:0,L:0,H:0,Q:0,Z:0,E:0,G:0,R:0,C:0};
+  if(!st.weaponLv) st.weaponLv = {N:1,S:0,L:0,H:0,Q:0,Z:0,E:0,G:0,R:0,C:0,J:0,K:0,M:0};
   const v = st.weaponLv[w];
-  return clamp(isFinite(v)?v:0, 0, 30);
+  return clamp(isFinite(v)?v:0, 0, 60);
 }
 dsIncWeaponLv(w, add=1){
   const st=this._ds;
   if(!st) return 0;
-  if(!st.weaponLv) st.weaponLv = {N:1,S:0,L:0,H:0,Q:0,Z:0,E:0,G:0,R:0,C:0};
+  if(!st.weaponLv) st.weaponLv = {N:1,S:0,L:0,H:0,Q:0,Z:0,E:0,G:0,R:0,C:0,J:0,K:0,M:0};
   const cur = this.dsGetWeaponLv(w);
-  const nv = clamp(cur + (isFinite(add)?add:1), 0, 30);
+  const nv = clamp(cur + (isFinite(add)?add:1), 0, 60);
   st.weaponLv[w] = nv;
+  // record run growth (only the gained part)
+  const gained = Math.max(0, nv - cur);
+  try{
+    if(gained>0){
+      st.runGrowth = st.runGrowth || {weaponLvUp:{}, missileLvUp:{a:0,w:0,h:0}, maxHpUp:0};
+      st.runGrowth.weaponLvUp = st.runGrowth.weaponLvUp || {};
+      const key = String(w||'').toUpperCase();
+      st.runGrowth.weaponLvUp[key] = num(st.runGrowth.weaponLvUp[key],0) + gained;
+    }
+  }catch(e){}
   return nv;
 }
 
@@ -2452,15 +2823,185 @@ dsIncWeaponLv(w, add=1){
     if(p) p.textContent = this._ds.paused ? '▶' : 'Ⅱ';
   }
 
+
+  // Weapon lock: keep current weapon equipped. While locked, picking *other* weapons adds EXP.
+  // Every 10 EXP -> locked weapon level +1.
+  dsToggleWeaponLock(){
+    const st=this._ds; if(!st) return;
+    st.weaponLock = st.weaponLock || {on:false, w:null, xp:0};
+    if(st.pickLockMode && st.pickLockMode.on){
+      this.dsAddToast('固定モード中は解除できません');
+      return;
+    }
+    if(!st.weaponLock.on){
+      st.weaponLock.on = true;
+      st.weaponLock.w = String((st.player && st.player.weapon) ? st.player.weapon : 'N').toUpperCase();
+      st.weaponLock.xp = 0;
+      this.dsAddToast('武器固定: ON');
+    }else{
+      st.weaponLock.on = false;
+      this.dsAddToast('武器固定: OFF');
+    }
+    this.dsUpdateHUD();
+  }
+
+  // Pick-lock mode: pause -> choose weapon from ALL weapons -> enable weaponLock until death.
+  // While active: score -20% (scoreMul=0.8). WeaponLock button cannot turn off.
+  dsOpenPickLockMenu(){
+    const st=this._ds;
+    if(!st || !st.running) return;
+    // pause immediately
+    st.paused = true;
+    const p=$("#dsPause");
+    if(p) p.textContent = '▶';
+
+    // build modal (once)
+    let modal = document.getElementById('dsPickLockModal');
+    if(!modal){
+      modal = document.createElement('div');
+      modal.id = 'dsPickLockModal';
+      modal.style.position = 'fixed';
+      modal.style.inset = '0';
+      modal.style.display = 'none';
+      modal.style.alignItems = 'center';
+      modal.style.justifyContent = 'center';
+      modal.style.zIndex = 12000;
+      modal.style.pointerEvents = 'auto';
+      modal.innerHTML = `
+        <div style="position:absolute;inset:0;background:rgba(0,0,0,0.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);"></div>
+        <div style="position:relative;width:min(92vw,520px);max-height:min(80vh,560px);overflow:auto;
+                    border-radius:18px;border:1px solid rgba(255,255,255,0.18);
+                    background:rgba(16,20,28,0.78);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+                    padding:14px 14px 12px 14px;color:#e9f2ff;font-family:system-ui,sans-serif;">
+          <div style="font-weight:900;font-size:16px;letter-spacing:0.02em;margin-bottom:6px;">
+            武器を選択（死ぬまで固定 / スコア-20%）
+          </div>
+          <div style="opacity:0.82;font-size:12px;line-height:1.35;margin-bottom:10px;">
+            このモード中は、武器固定と同じ挙動（他武器取得→固定武器にEXP）になります。解除はできません。
+          </div>
+          <div id="dsPickLockGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;"></div>
+          <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px;">
+            <button id="dsPickLockCancel" class="dsBtn">キャンセル</button>
+          </div>
+        </div>
+      `;
+      (document.getElementById('dotShootOL') || document.body).appendChild(modal);
+
+      const cancel = modal.querySelector('#dsPickLockCancel');
+      if(cancel){
+        cancel.addEventListener('click', ()=>{
+          // keep paused state as-is, but close menu
+          modal.style.display='none';
+        });
+      }
+      // click outside closes
+      modal.addEventListener('click', (ev)=>{
+        if(ev.target === modal) modal.style.display='none';
+      });
+    }
+
+    // fill buttons each time (so we can show lv)
+    const grid = modal.querySelector('#dsPickLockGrid');
+    if(grid){
+      grid.innerHTML = '';
+      const weapons = [
+        {k:'N', n:'ノーマル'},
+        {k:'S', n:'拡散'},
+        {k:'L', n:'貫通'},
+        {k:'H', n:'ホーミング'},
+        {k:'Q', n:'近ホーミング'},
+        {k:'Z', n:'レーザー'},
+        {k:'E', n:'弾消去'},
+        {k:'G', n:'鈍重爆弾'},
+        {k:'R', n:'ノコ刃'},
+        {k:'C', n:'跳弾ビーム'},
+        {k:'J', n:'岩押し'},
+        {k:'K', n:'岩拡散'},
+        {k:'M', n:'岩反射追尾'},
+      ];
+      for(const w of weapons){
+        const b = document.createElement('button');
+        b.className = 'dsBtn';
+        b.style.padding = '10px 8px';
+        b.style.borderRadius = '14px';
+        b.style.fontWeight = '900';
+        b.style.fontSize = '12px';
+        b.style.display = 'flex';
+        b.style.flexDirection = 'column';
+        b.style.gap = '2px';
+        const lv = this.dsGetWeaponLvEff(w.k);
+        b.innerHTML = `<div>${w.n}</div><div style="opacity:0.82;font-size:11px;">Lv${lv}</div>`;
+        b.addEventListener('click', ()=>{
+          this.dsActivatePickLockMode(w.k);
+          modal.style.display='none';
+        });
+        grid.appendChild(b);
+      }
+    }
+
+    modal.style.display='flex';
+  }
+
+  dsActivatePickLockMode(w){
+    const st=this._ds; if(!st || !st.running) return;
+    const k = String(w||'N').toUpperCase();
+    st.player.weapon = k;
+    // Force weapon lock ON for chosen weapon
+    st.weaponLock = st.weaponLock || {on:false, w:null, xp:0};
+    st.weaponLock.on = true;
+    st.weaponLock.w = k;
+    st.weaponLock.xp = 0;
+
+    // Enable pick-lock mode (until death)
+    st.pickLockMode = st.pickLockMode || {on:false};
+    st.pickLockMode.on = true;
+    st.scoreMul = 0.80;
+
+    // resume
+    st.paused = false;
+    const p=$("#dsPause");
+    if(p) p.textContent = 'Ⅱ';
+
+    this.dsAddToast('武器固定モード（スコア-20%）');
+    this.dsUpdateHUD();
+  }
+
+  dsResetPickLockMode(){
+    const st=this._ds; if(!st) return;
+    if(st.pickLockMode && st.pickLockMode.on){
+      st.pickLockMode.on = false;
+      st.scoreMul = 1;
+    }
+  }
+
+
   dsEndRun(backToMenu){
     const st = this._ds;
     if(!st) return;
     st.running = false;
+    this.dsResetPickLockMode();
     try{ if(st.raf) cancelAnimationFrame(st.raf); }catch(e){}
 
     // 記録
     this.dsRecordScore(st.score, {wave:st.wave, time:st.t, weapon:st.player.weapon, dif:st.dif});
     this.dsUpdateHUD(true);
+
+    // --- perma carry on death (boss kills determine how many) ---
+    try{
+      if(!backToMenu && (isFinite(st.lives)?st.lives:1) <= 0){
+        const bossKills = clamp(num(st.bossKillsRun,0), 0, 999);
+        const pool = this.dsBuildCarryPool(st.runGrowth);
+        const picked = this.dsPickCarry(pool, bossKills, {avoidImmediateRepeat:true});
+        const curPerma = st.perma || this.dsLoadPerma();
+        const applied = this.dsApplyCarryToPerma(curPerma, picked);
+        st.perma = applied.perma;
+        this.dsSavePerma(st.perma);
+        this.dsShowGameOverCarry(applied.lastCarry, bossKills);
+      }else{
+        this.dsShowGameOverCarry([], 0);
+      }
+    }catch(e){}
+
 
     const over = $("#dsOver");
     if(over) over.style.display='flex';
@@ -2476,9 +3017,22 @@ dsIncWeaponLv(w, add=1){
     if(!st || !st.running || st.paused) return;
     if(st.bomb<=0) return;
     st.bomb--;
-    // 敵弾消去＋敵に小ダメ
+    // Bomb: clear enemy bullets and wipe all *non-boss* enemies.
+    // Drops should still have a chance to occur as usual.
     st.ebullets.length = 0;
-    for(const e of st.enemies){ if(e) e.hp -= 2; }
+
+    // kill all normal enemies (boss excluded) and allow normal drop chance
+    if(Array.isArray(st.enemies) && st.enemies.length){
+      for(const e of st.enemies){
+        if(!e) continue;
+        // score + drop chance like a normal kill
+        try{ this.dsAddScore(num(e.score,0)); }catch(err){}
+        try{ this.dsDropPowerup(num(e.x,0.5), num(e.y,0.5), false); }catch(err){}
+      }
+      st.enemies.length = 0;
+    }
+
+    // (optional) tiny AoE damage to survivors is no longer needed since we wipe.
 if(st.boss){
   const maxHp = (isFinite(st.boss.maxHp)?st.boss.maxHp:st.boss.hp) || 1;
   const tier = (isFinite(st.boss.tier)?st.boss.tier:0);
@@ -2735,6 +3289,7 @@ if(st.boss){
     const st=this._ds; if(!st) return;
     const dt0 = (typeof dt!=='undefined' && isFinite(dt)) ? dt : 0;
     st.t += dt0*1000;
+    st.bossRespawnCd = Math.max(0, num(st.bossRespawnCd,0) - dt0);
 
     // difficulty ramps (endless)
     const timeLv = Math.floor(st.t/20000);         // every 20s
@@ -2797,7 +3352,7 @@ if(st.boss){
 
     // fire (rate slightly improves with weapon level)
 const rateFor = (w)=>{
-  const lv = this.dsGetWeaponLv(w||'N');
+  const lv = this.dsGetWeaponLvEff(w||'N');
   const base =
     (w==='G') ? 0.62 : // heavy bomb: very slow fire
     (w==='R') ? 0.44 : // saw: slow fire
@@ -2841,32 +3396,50 @@ const rateFor = (w)=>{
       this.dsSpawnEnemy();
     }
 
-// rocks (indestructible neon obstacles; increase over time)
+// rocks (indestructible neon obstacles)
+// NOTE: user request: enemies can ramp up, but rocks should NOT increase over time.
+// We keep existing rocks (if any) moving/wrapping, but we do not spawn new ones here.
 st.rocks = Array.isArray(st.rocks)?st.rocks:[];
 st.rockAcc = (isFinite(st.rockAcc)?st.rockAcc:0) + dt0;
-const rockIntv = Math.max(0.85, 4.20 - st.dif*0.08);
-const rockCap = Math.min(28, 6 + Math.floor(st.dif*0.55));
-while(st.rockAcc >= rockIntv && st.rocks.length < rockCap){
-  st.rockAcc -= rockIntv;
-  this.dsSpawnRock();
-}
 // update rocks drift (wrap)
 for(const r of st.rocks){
   r.t = (r.t||0) + dt0;
-  r.y += (r.vy||0.06) * dt0;
-  r.x += (r.vx||0) * dt0;
+
+  // pushed rocks move upward for a short time (J weapon)
+  if((r.pushT||0) > 0){
+    r.pushT = Math.max(0, num(r.pushT,0) - dt0);
+    const vy = isFinite(r.pushVy) ? r.pushVy : -0.18;
+    r.y += vy * dt0;
+    // mild damping towards zero so it eases out
+    r.pushVy = vy * (0.985 - dt0*0.08);
+    // during push, rocks drift less sideways
+    r.x += (r.vx||0) * dt0 * 0.35;
+  }else{
+    r.y += (r.vy||0.06) * dt0;
+    r.x += (r.vx||0) * dt0;
+  }
+
   if(r.x < 0.06){ r.x=0.06; r.vx = Math.abs(r.vx||0.02); }
   if(r.x > 0.94){ r.x=0.94; r.vx = -Math.abs(r.vx||0.02); }
   if(r.y > 1.28){
     r.y = -0.18 - Math.random()*0.22;
     r.x = 0.10 + Math.random()*0.80;
+    // reset push state on wrap
+    r.pushT = 0;
+  }
+  if(r.y < -0.60){
+    // keep within spawn band
+    r.y = -0.60;
   }
 }
 
+
 // boss
-    if(!st.boss && st.score >= st.nextBossAt){
+    if(!st.boss && num(st.bossRespawnCd,0)<=0 && st.score >= st.nextBossAt){
+      // Boss spawn gate:
+      // - nextBossAt is set on *boss defeat* (so kill-time doesn't compress the interval)
+      // - bossRespawnCd provides a minimum readable gap
       this.dsSpawnBoss();
-      st.nextBossAt += 12000 + st.dif*2000;
     }
 
     // update bullets
@@ -2879,14 +3452,27 @@ for(const r of st.rocks){
         b.x += (b.vx||0)*dt0;
         b.rockCd = (b.rockCd||0) - dt0;
         if(b.homing){
-  const t = this.dsNearestEnemy(b.x,b.y);
-  if(t){
-    const hpw = (isFinite(b.homingPow)?b.homingPow:1);
-    const ax = clamp((t.x - b.x) * (1.55 + hpw*0.22), -0.95, 0.95);
-    const turn = clamp(0.06 + hpw*0.004, 0.06, 0.16);
-    const damp = clamp(0.92 - hpw*0.002, 0.84, 0.92);
-    b.vx = (b.vx||0)*damp + ax*turn;
-  }
+    let t = null;
+    if(b.homingStrict && b.homingTarget){
+      t = b.homingTarget;
+      const alive = t && (num(t.hp,1) > 0) && Array.isArray(st.enemies) && st.enemies.includes(t) && (num(t.x,0.5) > -0.20) && (num(t.x,0.5) < 1.20) && (num(t.y,0.5) > -0.20) && (num(t.y,0.5) < 1.20);
+      if(!alive){
+        b.homing = false;
+        b.homingStrict = false;
+        b.homingTarget = null;
+        t = null;
+      }
+    }
+    if(!t){
+      t = this.dsNearestEnemy(b.x,b.y);
+    }
+    if(t){
+      const hpw = (isFinite(b.homingPow)?b.homingPow:1);
+      const ax = clamp((t.x - b.x) * (1.55 + hpw*0.22), -0.95, 0.95);
+      const turn = clamp(0.06 + hpw*0.004, 0.06, 0.16);
+      const damp = clamp(0.92 - hpw*0.002, 0.84, 0.92);
+      b.vx = (b.vx||0)*damp + ax*turn;
+    }
 }
         if(b.nearHoming){
   const hr = (isFinite(b.hr)?b.hr:0.26);
@@ -2917,31 +3503,72 @@ for(const r of st.rocks){
   }
 }
 
-// rocks block most bullets (even pierce), but special weapons can break them.
+// rocks block most bullets (even pierce), but special weapons can interact with them.
 if(!b.laser){
-  if(this.dsHitRock(b.x,b.y, 0.010)){
-    // R: grinder (keeps going) + chip rock HP
-    if((b.k||'')==='R'){
+  const rock = this.dsGetRockAt(b.x, b.y, 0.010);
+  if(rock){
+    const k = String(b.k||'').toUpperCase();
+
+    // cooldown for repeated interactions on the same frame/path
+    if((b.rockCd||0) > 0) b.rockCd -= dt0;
+
+    if(k==='R'){
+      // Saw: keeps going while chipping rock HP
       if((b.rockCd||0) <= 0){
         this.dsDamageRock(b.x,b.y, 0.020, num(b.rockDmg, 1.2));
-        b.rockCd = 0.08; // avoid multi-hits per frame
+        b.rockCd = 0.08;
       }
-      // do NOT block the saw
-    }else if((b.k||'')==='G'){
-      // G: bomb explodes on rock, breaks rocks
-      this.dsDamageRock(b.x,b.y, Math.max(0.06, num(b.boomR,0.22)*0.85), num(b.boomDmg, (b.dmg||1)*2.5));
-      // spawn a small visual pop (reuse enemy-hit explosion feel)
+      // do not block
+    }else if(k==='G'){
+      // Heavy bomb: explodes on rock and can break rocks
+      const br = Math.max(0.06, num(b.boomR,0.22));
+      const bd = num(b.boomDmg, (b.dmg||1)*2.5);
+      this.dsDamageRock(b.x,b.y, Math.max(0.06, br*0.85), bd);
+      // AoE damage to enemies + boss (so the explosion effect always matters)
+      for(const ee of st.enemies){
+        if(!ee) continue;
+        const dx2 = ee.x - b.x;
+        const dy2 = ee.y - b.y;
+        if((dx2*dx2 + dy2*dy2) <= br*br){
+          ee.hp -= bd;
+        }
+      }
+      if(st.boss){
+        const dx3 = st.boss.x - b.x;
+        const dy3 = st.boss.y - b.y;
+        if((dx3*dx3 + dy3*dy3) <= br*br){
+          st.boss.hp -= Math.max(1, Math.floor(bd));
+        }
+      }
       st.fx = st.fx || {};
       st.fx.particles = Array.isArray(st.fx.particles)?st.fx.particles:[];
-      const pc = 10;
-      for(let pi=0;pi<pc;pi++){
+      for(let pi=0;pi<10;pi++){
         st.fx.particles.push({x:b.x, y:b.y, vx:(Math.random()*2-1)*0.45, vy:(Math.random()*2-1)*0.45, a:1, c:0});
       }
-      // remove by not pushing to keep array
+      continue; // remove bullet
+    }else if(k==='J'){
+      // Rock Pusher: push the rock upward; bullet is consumed on impact
+      this.dsRockPush(rock, num(b.dmg,1));
       continue;
+    }else if(k==='K'){
+      // Rock Splitter: spawn scatter shots from the rock.
+      // IMPORTANT: shards generated by this split should NOT re-trigger splitting, otherwise it explodes exponentially and can freeze the game.
+      if(!b.splitShard){
+        // original K bullet: consume and split
+        this.dsRockSplit(rock.x, rock.y, num(b.dmg,1), this.dsGetWeaponLvEff('K'));
+        continue;
+      }
+      // split shards: pass through rocks (noRockVanish=true) without triggering another split
+    }else if(k==='M'){
+      // Rock Homing Missile: bounce off rock (do not vanish) and enable strong homing
+      if((b.rockCd||0) <= 0){
+        this.dsRockHomingBounce(b, rock);
+        b.rockCd = 0.06;
+      }
+      // do not block
     }else{
-      // remove by not pushing to keep array
-      continue;
+      // Default: rocks block bullets unless explicitly allowed
+      if(!b.noRockVanish) continue;
     }
   }
 }else{
@@ -3232,6 +3859,22 @@ if(b.y>-0.2 && b.y<1.2 && b.x>-0.2 && b.x<1.2) keepEB.push(b);
         e.cd = 1.05 - Math.min(0.35, st.dif*0.02) + Math.random()*0.25;
         this.dsEnemyShoot(e, (e.kind==='mirage')?3:1);
       }
+      // pushed rock collision: rocks become a slow moving ram + shield
+      if(e.hp>0 && Array.isArray(st.rocks) && st.rocks.length){
+        for(const r of st.rocks){
+          if((r.pushT||0) <= 0) continue;
+          const rr = num(r.r,0.05) + 0.022;
+          const dx = e.x - r.x, dy = e.y - r.y;
+          if(dx*dx + dy*dy < rr*rr){
+            // normal enemies: crushed. (boss is handled separately in boss update)
+            e.hp = 0;
+            this.dsAddScore(120 + st.dif*2, 1.0, e.x, e.y);
+            // rock loses its push after a hit
+            r.pushT = Math.min(num(r.pushT,0), 0.35);
+            break;
+          }
+        }
+      }
       if(e.hp>0 && e.y<1.15) keepE.push(e);
     }
     st.enemies = keepE;
@@ -3255,23 +3898,60 @@ if(st.boss){
   }else if(b.kind==='burst'){
     b.x = 0.5 + Math.sin(b.t*mv*0.85 + seed)* (ampX*0.92);
     b.y = 0.14 + Math.sin(b.t*mv*0.48 + seed*0.3)* (ampY*0.90);
+  }else if(b.kind==='sniper'){
+    // steadier, less lateral movement (keeps snipes readable)
+    b.x = 0.5 + Math.sin(b.t*mv*0.62 + seed)* (ampX*0.62);
+    b.y = 0.13 + Math.sin(b.t*mv*0.38 + seed*0.3)* (ampY*0.85);
+  }else if(b.kind==='spray'){
+    // jittery side-to-side
+    b.x = 0.5 + Math.sin(b.t*mv*1.20 + seed)* (ampX*1.10) + Math.sin(b.t*3.0 + seed)*0.010;
+    b.y = 0.14 + Math.sin(b.t*mv*0.52 + seed*0.3)* (ampY*0.95);
   }else{
     b.x = 0.5 + Math.sin(b.t*mv*0.80 + seed)* ampX;
     b.y = 0.14 + Math.sin(b.t*mv*0.45 + seed*0.3)* ampY;
   }
 
+  // pushed rock collision with boss: deals damage and ends push quickly
+  if(Array.isArray(st.rocks) && st.rocks.length){
+    for(const r of st.rocks){
+      if((r.pushT||0) <= 0) continue;
+      const rr = num(r.r,0.05) + 0.030;
+      const dx = b.x - r.x, dy = b.y - r.y;
+      if(dx*dx + dy*dy < rr*rr){
+        b.hp = Math.max(0, num(b.hp,1) - Math.max(1, Math.round(num(r.pushDmg,2))));
+        this.dsAddScore(240 + st.dif*3, 1.0, b.x, b.y);
+        r.pushT = Math.min(num(r.pushT,0), 0.25);
+        break;
+      }
+    }
+  }
+
   b.cd -= dt0;
   if(b.cd<=0){
-    const baseCd = 0.72 - st.dif*0.02 - tier*0.012;
-    b.cd = Math.max(0.18, baseCd);
+    let baseCd = 0.78 - st.dif*0.018 - tier*0.010; // slightly slower overall
+    // Pattern-based cadence tweaks
+    if(b.kind==='burst') baseCd *= 1.45;
+    if(b.kind==='sniper') baseCd *= 1.20;
+    if(b.kind==='spray') baseCd *= 0.92;
+
+    b.cd = Math.max(0.22, baseCd);
     this.dsBossShoot(b);
   }
   if(b.hp<=0){
+    // boss kill count (for perma carry)
+    try{ st.bossKillsRun = num(st.bossKillsRun,0) + 1; }catch(e){}
     this.dsAddScore(3200 + st.dif*140 + tier*180);
     // drop rare
     this.dsDropPowerup(b.x, b.y, true);
+    // Keep a readable gap before the next boss appears (independent from score growth).
+    st.bossRespawnCd = Math.max(num(st.bossRespawnCd,0), 6.0);
+    // Next boss threshold is decided at defeat time, so the interval stays consistent
+    // even if you took a long time to finish the boss.
+    st.nextBossAt = st.score + (20000 + st.dif*2500);
+
     st.boss = null;
   }
+
 }
 
 
@@ -3463,7 +4143,16 @@ if(st.boss){
               if((dx2*dx2 + dy2*dy2) <= br*br){
                 ee.hp -= bd;
               }
+            // also affect boss if within range of impact center
+            if(st.boss){
+              const dx3 = st.boss.x - e.x;
+              const dy3 = st.boss.y - e.y;
+              if((dx3*dx3 + dy3*dy3) <= br*br){
+                st.boss.hp -= Math.max(1, Math.floor(bd));
+              }
             }
+          }
+
           }
           // Ricochet chain: 1 jump to nearest enemy within range
           if(b.chain && b.chainR){
@@ -3744,7 +4433,7 @@ dsFire(unit){
   const st=this._ds; if(!st) return;
   const u = unit || st.player;
   const w = (u && u.weapon) ? u.weapon : ((st.player && st.player.weapon) ? st.player.weapon : 'N');
-  const lv = this.dsGetWeaponLv(w);
+  const lv = this.dsGetWeaponLvEff(w);
   const add=(x,y,vx,vy,opt={})=>{
     st.bullets.push({
       x,y,vx: vx||0, vy,
@@ -3873,6 +4562,19 @@ dsFire(unit){
     this.dsZapChain(u, lv);
     return; // no physical bullet needed
 
+ 
+  }else if(w==='J'){
+    // Rock Pusher: hitting a rock pushes it upward (slow), making it a moving shield & ram.
+    const dmg = 0.95 + lv*0.05;
+    add(x,y,0,-1.12*spUp,{dmg,k:'J', rockDmg:1.0 + lv*0.05});
+  }else if(w==='K'){
+    // Rock Splitter: hitting a rock scatters multiplying shots (shots do not vanish on rocks).
+    const dmg = 0.85 + lv*0.045;
+    add(x,y,0,-1.10*spUp,{dmg,k:'K', rockDmg:0.9 + lv*0.05});
+  }else if(w==='M'){
+    // Rock Homing Missile: slow missile; when it touches a rock it bounces (doesn't vanish) and then homes hard.
+    const dmg = 1.20 + lv*0.08;
+    add(x,y,0,-0.55*spUp,{dmg,k:'M', missile:true, noRockVanish:true, homing:false, homingPow:0, rockCd:0});
   }else{
     const dmg = 1.0 + lv*0.05;
     add(x,y,0,-1.15*spUp,{dmg});
@@ -4099,6 +4801,76 @@ dsFire(unit){
     return false;
   }
 
+
+  // Return the first rock object intersecting point (x,y) with radius rad.
+  dsGetRockAt(x,y,rad){
+    const st=this._ds; if(!st) return null;
+    if(!Array.isArray(st.rocks) || !st.rocks.length) return null;
+    const rr = num(rad,0.01);
+    for(const r of st.rocks){
+      const dx = x - r.x, dy = y - r.y;
+      const rrad = num(r.r,0.05) + rr;
+      if(dx*dx + dy*dy < rrad*rrad) return r;
+    }
+    return null;
+  }
+
+  // Rock Pusher: push rock upward slowly and let it ram enemies (including boss).
+  dsRockPush(rock, dmg=1){
+    const st=this._ds; if(!st || !rock) return;
+    rock.pushT = Math.max(num(rock.pushT,0), 2.2);   // seconds
+    rock.pushVy = -0.18;                              // normalized per second
+    rock.pushDmg = Math.max(num(rock.pushDmg,0), 0.8 + num(dmg,1)*0.6);
+    // visual ping
+    st.fx = st.fx || {};
+    st.fx.particles = Array.isArray(st.fx.particles)?st.fx.particles:[];
+    for(let i=0;i<6;i++){
+      st.fx.particles.push({x:rock.x, y:rock.y, vx:(Math.random()*2-1)*0.25, vy:(Math.random()*2-1)*0.25, a:1, c:0});
+    }
+  }
+
+  // Rock Splitter: spawn shots from rock in random directions (shots do not vanish on rocks).
+  // Rock Splitter: spawn shots from rock in random directions (shots do not vanish on rocks).
+  dsRockSplit(x,y, dmg=1, lv=1){
+    const st=this._ds; if(!st) return;
+    st.bullets = Array.isArray(st.bullets)?st.bullets:[];
+    const n = clamp(4 + Math.floor(lv/3), 4, 10);
+    for(let i=0;i<n;i++){
+      const ang = (-Math.PI/2) + (Math.random()*Math.PI*1.6 - Math.PI*0.8);
+      const sp = 0.85 + Math.random()*0.25;
+      const vx = Math.cos(ang)*sp*0.55;
+      const vy = Math.sin(ang)*sp*0.55;
+      st.bullets.push({x, y, vx, vy, dmg: 0.55 + num(dmg,1)*0.45, k:'K', noRockVanish:true, splitShard:true});
+    }
+  }
+
+  // Rock Homing Missile: bounce and then home towards a RANDOM visible enemy.
+  // If the target disappears, the shot loses tracking and flies straight off-screen.
+  dsRockHomingBounce(b, rock){
+    const st=this._ds; if(!st || !b || !rock) return;
+    // bounce away from rock center a bit
+    const dx = b.x - rock.x, dy = b.y - rock.y;
+    const d = Math.sqrt(dx*dx + dy*dy) || 1e-6;
+    const nx = dx/d, ny = dy/d;
+    const sp = Math.max(0.25, Math.sqrt((b.vx||0)*(b.vx||0) + (b.vy||0)*(b.vy||0)));
+    // reflect with slight randomness
+    const jitter = (Math.random()*2-1)*0.35;
+    b.vx = (nx + jitter*0.35) * sp;
+    b.vy = (ny - 0.65) * sp; // keep it generally upward after bounce
+    b.noRockVanish = true;
+
+    const tgt = this.dsRandomVisibleEnemy();
+    if(tgt){
+      b.homing = true;
+      b.homingStrict = true;
+      b.homingTarget = tgt;
+      b.homingPow = Math.max(num(b.homingPow,0), 5.0);
+    }else{
+      b.homing = false;
+      b.homingStrict = false;
+      b.homingTarget = null;
+    }
+  }
   dsDamageRock(x,y,rad,dmg){
     const st=this._ds; if(!st) return false;
     const rocks = Array.isArray(st.rocks)?st.rocks:null;
@@ -4156,15 +4928,27 @@ dsFire(unit){
 
   dsSpawnBoss(){
     const st=this._ds; if(!st) return;
+
+    // Boss tuning: reduce HP scaling a bit (was very tanky) and randomize boss kinds.
+    const tier = clamp(Math.floor(st.dif/4), 0, 8);
+
+    // Kinds: movement/shoot patterns vary; randomly chosen each spawn.
+    const kinds = ['ring','spiral','fan','burst','sniper','spray'];
+    const kind = kinds[Math.floor(Math.random()*kinds.length)] || 'ring';
+
+    const hpBase = 150 + st.dif*30; // ↓ from 220 + dif*45
     st.boss = {
       x:0.5, y:0.14,
-      hp: 220 + st.dif*45,
-      maxHp: 220 + st.dif*45,
-      tier: clamp(Math.floor(st.dif/4), 0, 8),
+      hp: hpBase,
+      maxHp: hpBase,
+      tier,
       t:0,
-      cd:0.6,
+      cd:0.55,
       phase:0,
+      kind,
+      seed: Math.random()*1000,
     };
+
     // small bonus
     this.dsAddScore(800);
   }
@@ -4172,18 +4956,110 @@ dsFire(unit){
   dsBossShoot(b){
     const st=this._ds; if(!st) return;
     const p=st.player;
-    const sp = 0.37 + st.dif*0.016;
-    // aimed + ring
+
+    const tier = (isFinite(b.tier)?b.tier:1);
+    const baseSp = 0.30 + st.dif*0.012 + tier*0.004;
+
     const dx = p.x - b.x;
     const dy = p.y - b.y;
     const ang0 = Math.atan2(dy,dx);
-    st.ebullets.push({x:b.x,y:b.y,vx:Math.cos(ang0)*sp,vy:Math.sin(ang0)*sp});
+
+    const push=(a, spMul=1.0)=>{
+      const sp = baseSp * spMul;
+      st.ebullets.push({x:b.x,y:b.y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp});
+    };
+
+    // Each kind tweaks the pattern.
+    if(b.kind==='sniper'){
+      // Aimed fast shot + tiny offset shot (pressure but readable)
+      push(ang0, 1.55);
+      push(ang0 + 0.08*Math.sin(b.t*1.3), 1.25);
+      return;
+    }
+
+    if(b.kind==='fan'){
+      // Aimed fan spread
+      const n = 7;
+      const spread = 0.70;
+      for(let i=0;i<n;i++){
+        const t = (n===1)?0:(i/(n-1));
+        const a = ang0 + (t-0.5)*spread;
+        push(a, 1.0);
+      }
+      // a light ring to keep it "bossy"
+      const ring = 6;
+      const rot = b.t*0.55;
+      for(let i=0;i<ring;i++){
+        const a = rot + i*(Math.PI*2/ring);
+        push(a, 0.70);
+      }
+      return;
+    }
+
+    if(b.kind==='spiral'){
+      // Rotating trio + a slow ring
+      const rot = b.t*1.25;
+      push(rot, 1.05);
+      push(rot + 2.09, 1.00);
+      push(rot + 4.18, 1.00);
+      const ring = 5;
+      for(let i=0;i<ring;i++){
+        const a = rot*0.6 + i*(Math.PI*2/ring);
+        push(a, 0.60);
+      }
+      return;
+    }
+
+    if(b.kind==='burst'){
+      // Burst ring (less frequent via cd logic) + aimed shot
+      push(ang0, 1.10);
+      const ring = 12;
+      const rot = b.t*0.85;
+      for(let i=0;i<ring;i++){
+        const a = rot + i*(Math.PI*2/ring);
+        push(a, 0.78);
+      }
+      return;
+    }
+
+    if(b.kind==='spray'){
+      // Chaotic downward-ish spray
+      const n = 9;
+      for(let i=0;i<n;i++){
+        const a = (Math.PI/2) + (Math.random()-0.5)*1.25 + 0.10*Math.sin(b.t*0.7);
+        push(a, 0.85);
+      }
+      // occasional aimed pressure shot
+      if(Math.random()<0.55) push(ang0, 1.10);
+      return;
+    }
+
+    // Default: ring boss (readable, classic)
+    push(ang0, 1.00);
     const ring = 8;
+
     const rot = b.t*0.9;
     for(let i=0;i<ring;i++){
       const a = rot + i*(Math.PI*2/ring);
-      st.ebullets.push({x:b.x,y:b.y,vx:Math.cos(a)*sp*0.72,vy:Math.sin(a)*sp*0.72});
+      push(a, 0.72);
     }
+  }
+
+
+  // Pick a random enemy that is currently on-screen (used by Rock Homing 'M').
+  dsRandomVisibleEnemy(){
+    const st=this._ds; if(!st) return null;
+    const es = Array.isArray(st.enemies)?st.enemies:null;
+    if(!es || !es.length) return null;
+    const cand = [];
+    for(const e of es){
+      if(!e) continue;
+      if(num(e.hp,1) <= 0) continue;
+      const x = num(e.x, -9), y = num(e.y, -9);
+      if(x >= -0.05 && x <= 1.05 && y >= -0.10 && y <= 1.10) cand.push(e);
+    }
+    if(!cand.length) return null;
+    return cand[(Math.random()*cand.length)|0];
   }
 
   dsNearestEnemy(x,y, maxDist){
@@ -4272,7 +5148,8 @@ dsFire(unit){
   dsAddScore(pts){
     const st=this._ds; if(!st) return;
     const mul = 1 + this.dsGetClutchBonus();
-    st.score += Math.round(num(pts,0) * mul);
+    const sm = (st && isFinite(st.scoreMul)) ? st.scoreMul : 1;
+    st.score += Math.round(num(pts,0) * mul * sm);
   }
 
   dsDropPowerup(x,y,isBoss){
@@ -4294,7 +5171,8 @@ dsFire(unit){
       const tA = w.barrier;
       const tO = tA + w.droneAdd;
       const tI = tO + w.inv;
-      const tM = tI + w.missile;
+      const tU = tI + (w.maxHpUp||0);
+      const tM = tU + w.missile;
       const tT = tM + w.tiny;
       const tP = tT + w.speed;
       const tY = tP + (w.heal||0);
@@ -4306,10 +5184,14 @@ dsFire(unit){
       const tG = tL + (w.heavyBomb||0);
       const tR = tG + (w.saw||0);
       const tC = tR + (w.ricochet||0);
+      const tJ = tC + (w.rockPush||0);
+      const tK = tJ + (w.rockSplit||0);
+      const tM2 = tK + (w.rockHoming||0);
       // remaining: S/B
       if(r < tA) type='A';
       else if(r < tO) type='O';
       else if(r < tI) type='I';
+      else if(r < tU) type='U';
       else if(r < tM) type = (Math.random()<1.0?'a':(Math.random()<0.5?'w':'h'));
       else if(r < tT) type='T';
       else if(r < tP) type='P';
@@ -4322,6 +5204,9 @@ dsFire(unit){
       else if(r < tG) type='G';
       else if(r < tR) type='R';
       else if(r < tC) type='C';
+      else if(r < tJ) type='J';
+      else if(r < tK) type='K';
+      else if(r < tM2) type='M';
       else type = (Math.random()<0.55?'S':'B');
     }else{
       // normal
@@ -4339,7 +5224,8 @@ dsFire(unit){
       const tY = tP + num(w.heal,    0.030);
       const tT = tY + num(w.tiny,    0.050);
       const tI = tT + num(w.inv,     0.0005);
-      const tM = tI + num(w.missile, 0.040);
+      const tU = tI + num(w.maxHpUp, 0.0005);
+      const tM = tU + num(w.missile, 0.040);
       const tS = tM + num(w.spread,  0.10);
       const tL = tS + num(w.pierce,  0.05);
       const tQ = tL + num(w.nearHom, 0.025);
@@ -4349,7 +5235,10 @@ dsFire(unit){
       const tG = tE + num(w.heavyBomb, 0.010);
       const tR = tG + num(w.saw,      0.010);
       const tC = tR + num(w.ricochet, 0.008);
-      const tB = tC + num(w.bomb,    0.025);
+      const tJ = tC + num(w.rockPush, 0.006);
+      const tK = tJ + num(w.rockSplit, 0.005);
+      const tM2 = tK + num(w.rockHoming, 0.005);
+      const tB = tM2 + num(w.bomb,    0.025);
 
       if(r < tO) type='O';
       else if(r < tA) type='A';
@@ -4357,6 +5246,7 @@ dsFire(unit){
       else if(r < tY) type='Y';
       else if(r < tT) type='T';
       else if(r < tI) type='I';
+      else if(r < tU) type='U';
       else if(r < tM) type = (Math.random()<1.0?'a':(Math.random()<0.5?'w':'h'));
       else if(r < tS) type='S';
       else if(r < tL) type='L';
@@ -4367,6 +5257,9 @@ dsFire(unit){
       else if(r < tG) type='G';
       else if(r < tR) type='R';
       else if(r < tC) type='C';
+      else if(r < tJ) type='J';
+      else if(r < tK) type='K';
+      else if(r < tM2) type='M';
       else if(r < tB) type='B';
     }
 
@@ -4633,6 +5526,10 @@ dsFire(unit){
       if(tL.includes('heavy') || tL.includes('bomb')) type='G';
       else if(tL.includes('saw')) type='R';
       else if(tL.includes('rico')) type='C';
+      else if(tL.includes('rock') && (tL.includes('push')||tL.includes('pusher'))) type='J';
+      else if(tL.includes('rock') && (tL.includes('split')||tL.includes('scatter'))) type='K';
+      else if(tL.includes('rock') && (tL.includes('home')||tL.includes('homing'))) type='M';
+      else if(tL.includes('maxhp') || tL.includes('hpup') || tL.includes('hp+') || tL.includes('hp')) type='U';
       else type = type[0];
     }
     // missiles are lowercase (a/w/h). Everything else uses uppercase single-letter codes.
@@ -4650,6 +5547,9 @@ dsFire(unit){
              t==='G'?'鈍重爆弾':
              t==='R'?'ノコ刃':
              t==='C'?'跳弾ビーム':
+             t==='J'?'岩押し':
+             t==='K'?'岩拡散':
+             t==='M'?'岩反射追尾':
              t==='N'?'ノーマル':
              String(t||'');
     };
@@ -4700,7 +5600,13 @@ dsFire(unit){
       const cur = num(st.missileLv[key] || 0, 0);
       st.missileLv[key] = clamp(cur + 1, 1, 5);
       st.missileType = key;
-      this.dsAddToast('ミサイル '+this.dsMissileLabel(key, st.missileLv[key]));
+      // record run growth
+      try{
+        st.runGrowth = st.runGrowth || {weaponLvUp:{}, missileLvUp:{a:0,w:0,h:0}, maxHpUp:0};
+        st.runGrowth.missileLvUp = st.runGrowth.missileLvUp || {a:0,w:0,h:0};
+        st.runGrowth.missileLvUp[key] = num(st.runGrowth.missileLvUp[key],0) + 1;
+      }catch(e){}
+      this.dsAddToast('ミサイル '+this.dsMissileLabel(key, this.dsGetMissileLvEff(key)));
       this.dsUpdateHUD();
 
     if(type==='Y'){
@@ -4737,12 +5643,28 @@ dsFire(unit){
       return;
     }
 
+    if(type==='U'){
+      // Max HP up (SUPER SUPER rare) — eligible for perma carry
+      st.livesMax = isFinite(st.livesMax)?st.livesMax:3;
+      st.lives = isFinite(st.lives)?st.lives:st.livesMax;
+      st.livesMax = Math.min(99, st.livesMax + 1);
+      st.lives = Math.min(st.livesMax, st.lives + 1);
+      // record run growth
+      try{
+        st.runGrowth = st.runGrowth || {weaponLvUp:{}, missileLvUp:{a:0,w:0,h:0}, maxHpUp:0};
+        st.runGrowth.maxHpUp = num(st.runGrowth.maxHpUp,0) + 1;
+      }catch(e){}
+      this.dsAddToast('最大HP +1');
+      this.dsUpdateHUD();
       return;
+    }
+
+    return;
     }
 
     // items are picked by the player, but the benefit is randomly assigned to player or one of drones
     // Weapon pickups should always equip the player (so the bullet pattern changes immediately).
-    const isWeapon = (t)=>('NSLHQZEGRC'.indexOf(String(t||'').toUpperCase())>=0);
+    const isWeapon = (t)=>('NSLHQZEGRCJKM'.indexOf(String(t||'').toUpperCase())>=0);
     const targets = [st.player, ...st.drones];
     const tgt = isWeapon(type) ? st.player : targets[Math.floor(Math.random()*targets.length)];
 
@@ -4758,12 +5680,37 @@ dsFire(unit){
     }else if(type==='T'){ // smaller hitbox
       tgt.hitMul = clamp((isFinite(tgt.hitMul)?tgt.hitMul:1) * 0.90, 0.45, 1);
       this.dsAddToast('当たり判定↓ → '+targetLabel(tgt));
-}else{
+}else if(isWeapon(type)){
   // weapon pickup: level up per-weapon, persists until game over
   const w = String(type||'N').toUpperCase();
+
+  // --- weapon lock EXP ---
+  // While locked, picking a *different* weapon does NOT change equipped weapon.
+  // Instead, it adds EXP to the locked weapon; every 10 EXP -> +1 level.
+  if(st.weaponLock && st.weaponLock.on && tgt===st.player){
+    const lockedW = String(st.weaponLock.w || (st.player && st.player.weapon) || 'N').toUpperCase();
+    st.weaponLock.w = lockedW;
+    if(w !== lockedW){
+      st.weaponLock.xp = num(st.weaponLock.xp, 0) + 1;
+      const xp = st.weaponLock.xp;
+      if(xp >= 10){
+        st.weaponLock.xp = xp - 10;
+        const lv2 = this.dsIncWeaponLv(lockedW, 1);
+        this.dsAddToast(`固定EXP 10/10 → ${weaponName(lockedW)} Lv${lv2}`);
+      }else{
+        this.dsAddToast(`固定EXP ${xp}/10`);
+      }
+      this.dsUpdateHUD();
+      return;
+    }
+  }
+
   const lv = this.dsIncWeaponLv(w, 1);
   tgt.weapon = w;
   this.dsAddToast('武器:'+weaponName(w)+' Lv'+lv+' → '+targetLabel(tgt));
+}else{
+  // unknown type: ignore
+  return;
 }
 
     // If a drone receives any powerup, it becomes autonomous and scales its intelligence with assigned item count.
@@ -4791,13 +5738,16 @@ dsFire(unit){
   st.player.weapon==='Z'?'LASER':
   st.player.weapon==='G'?'HEAVY-BOMB':
   st.player.weapon==='R'?'SAW':
-  st.player.weapon==='C'?'RICOCHET':'ERASE');
-const wLv = this.dsGetWeaponLv(st.player.weapon||'N');
+  st.player.weapon==='C'?'RICOCHET':
+  st.player.weapon==='J'?'ROCK-PUSH':
+  st.player.weapon==='K'?'ROCK-SPLIT':
+  st.player.weapon==='M'?'ROCK-HOM':'?');
+const wLv = this.dsGetWeaponLvEff(st.player.weapon||'N');
 const dCount = (Array.isArray(st.drones)?st.drones.length:0);
     const sh = (st.player.shield?1:0);
     set('dsWeapon', `${wName} Lv${wLv} D${dCount}${sh?(' S'+sh):''}`);
     set('dsBombCount', st.bomb);
-    const mLabel = this.dsMissileLabel(st.missileType || 'a', (st.missileLv && st.missileLv[st.missileType||'a']) || 1);
+    const mLabel = this.dsMissileLabel(st.missileType || 'a', this.dsGetMissileLvEff(st.missileType || 'a') || 1);
     set('dsMissile', mLabel);
 
     // clutch badge was removed (duplicate white text) — keep only green countdown near the player.
@@ -4830,7 +5780,7 @@ const dCount = (Array.isArray(st.drones)?st.drones.length:0);
         host.appendChild(wb);
       }
       const w = String(st.player.weapon||'N');
-      const lv = this.dsGetWeaponLv(w);
+      const lv = this.dsGetWeaponLvEff(w);
       const jp = (w==='N'?'ノーマル':
                   w==='S'?'拡散':
                   w==='L'?'貫通':
@@ -4840,8 +5790,20 @@ const dCount = (Array.isArray(st.drones)?st.drones.length:0);
                   w==='E'?'弾消去':
                   w==='G'?'鈍重爆弾':
                   w==='R'?'ノコ刃':
-                  w==='C'?'跳弾ビーム':w);
-      wb.textContent = `武器: ${jp} Lv${lv}`;
+                  w==='C'?'跳弾ビーム':
+                  w==='J'?'岩押し':
+                  w==='K'?'岩拡散':
+                  w==='M'?'岩反射追尾':w);
+      {
+      let lockTxt = '';
+      try{
+        if(st.weaponLock && st.weaponLock.on){
+          const xp = num(st.weaponLock.xp, 0);
+          lockTxt = ` 🔒固定EXP ${xp}/10`;
+        }
+      }catch(e){}
+      wb.textContent = `武器: ${jp} Lv${lv}${lockTxt}`;
+    }
       wb.style.display = 'block';
     }catch(e){}
 
@@ -5304,8 +6266,8 @@ for(const r of st.rocks){
       ctx.fillStyle='rgba(0,0,0,0.35)';
       ctx.fillRect(x-18,y-6,36,12);
       // hp bar
-      const maxHp = 90 + st.dif*18;
-      const hp = clamp(b.hp/maxHp,0,1);
+      const maxHp = num(b.maxHp, 0) || (150 + st.dif*30);
+      const hp = clamp(num(b.hp,0)/maxHp,0,1);
       ctx.fillStyle='rgba(120,255,230,0.95)';
       ctx.fillRect(6,6, Math.floor((W-12)*hp), 3);
       ctx.fillStyle='rgba(255,255,255,0.25)';
@@ -9279,9 +10241,7 @@ Game.prototype.tileSpan = function(x,y){
   if(stair) return `<span class="cell stair" ${data}>></span>`;
   return `<span class="cell" ${data}>${this.nearStairs.has(key)?'·':'.'}</span>`;
 }
-    ctx.restore();
 
-;
 
 /*
 === LEGACY (kept for reference / rollback safety) ===
@@ -9506,3 +10466,78 @@ dsForcePadVisible(reason=""){
 
     
 */
+
+
+/* === Added Weapons: Rock Interaction Series ===
+ W1: Rock Pusher Gun
+ W2: Rock Splitter Gun
+ W3: Rock Homing Missile
+*/
+if(typeof window.DS_EXTRA_WEAPONS==='undefined'){
+  window.DS_EXTRA_WEAPONS = true;
+
+  // Rock pusher: rocks become moving shields
+  window.dsRockPush = function(rock){
+    if(!rock) return;
+    rock.vy = -0.03;        // slow upward drift (normalized)
+    rock.isShield = true;   // treat as shield if collision logic checks it
+  };
+
+  // Rock splitter: spawn random shards (do not vanish on rocks)
+  window.dsRockSplit = function(x,y){
+    if(typeof dsBullets==='undefined') return;
+    for(let i=0;i<6;i++){
+      dsBullets.push({x,y,vx:(Math.random()*0.1-0.05),vy:(Math.random()*0.1-0.05),dmg:4,life:120,noRockVanish:true});
+    }
+  };
+
+  // Rock homing missile: slow, strong homing
+  window.dsRockHoming = function(x,y){
+    if(typeof dsBullets==='undefined') return;
+    dsBullets.push({x,y,vx:0,vy:-0.02,homing:true,homingPow:1.0,dmg:18,life:200,missile:true,noRockVanish:true});
+  };
+}
+
+
+// === DOTSTRIKE Perma (Persistent Growth) ===
+function dsDefaultPerma(){
+  return {
+    v:1,
+    updatedAt: Date.now(),
+    weaponLvBonus:{},
+    maxHpBonus:0,
+    lastCarry:[]
+  };
+}
+function dsLoadPerma(){
+  try{
+    const raw = localStorage.getItem(LS_DOTSTRIKE_PERMA);
+    if(!raw) return dsDefaultPerma();
+    const o = JSON.parse(raw);
+    if(!o || o.v!==1) return dsDefaultPerma();
+    o.weaponLvBonus = o.weaponLvBonus||{};
+    o.maxHpBonus = o.maxHpBonus||0;
+    o.lastCarry = Array.isArray(o.lastCarry)?o.lastCarry:[];
+    return o;
+  }catch(e){
+    console.error("perma load failed", e);
+    return dsDefaultPerma();
+  }
+}
+function dsSavePerma(p){
+  try{
+    p.updatedAt = Date.now();
+    localStorage.setItem(LS_DOTSTRIKE_PERMA, JSON.stringify(p));
+  }catch(e){
+    console.error("perma save failed", e);
+  }
+}
+function dsResetPerma(){
+  try{
+    localStorage.removeItem(LS_DOTSTRIKE_PERMA);
+  }catch(e){
+    console.error("perma reset failed", e);
+  }
+}
+
+// NOTE: The DotStrike UI binds reset button via dsInitUIOnce() with confirmation.
