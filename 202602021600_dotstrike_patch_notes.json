@@ -1,0 +1,69 @@
+{
+  "zip": {
+    "name": "202602021600_dotstrike_patch_06.zip",
+    "suffix_rule": "previous +01 (zero-padded)",
+    "timestamp_jst": "2026-02-02 16:00"
+  },
+  "base": {
+    "source": "user_uploaded_files_in_this_chat",
+    "files": [
+      "index.html",
+      "app.js"
+    ],
+    "note": "This patch is applied on top of the files you attached in this message thread (avoid rollback)."
+  },
+  "changes": [
+    {
+      "id": "boss-carry-scaling",
+      "summary": "Boss撃破の引き継ぎアイテム数を「2体目以降増える」方式に変更",
+      "detail": "ボス撃破数=bossKills のとき、引き継ぎ抽選回数 carryN = 1+2+...+bossKills (= bossKills*(bossKills+1)/2)。GameOver時の PERMA CARRY 表示も carryN と bossKills を併記。"
+    },
+    {
+      "id": "drop-rate-decay",
+      "summary": "時間/難易度が進むほど敵撃破ドロップ率を低下させ、時間あたり獲得量を抑制",
+      "detail": "dsDropPowerup の drop chance に dsDropTimeMul() を掛ける。dif が上がるほど 1/(1+dif*0.085) で低下（下限0.25）。Clutchボーナスも同じ倍率で調整され、序盤基準の獲得ペースに寄せる。"
+    },
+    {
+      "id": "enemy-hp-ramp",
+      "summary": "時間経過に合わせて敵HPを少しずつ強化",
+      "detail": "dsSpawnEnemy の生成後に dsEnemyHpMul() を掛けて e.hp / e.maxHp を底上げ（時間+難易度ベースで最大3倍まで）。大量湧き後も弱すぎて溶ける問題を緩和。"
+    },
+    {
+      "id": "rocks-constant",
+      "summary": "岩は時間で増やさず、一定数を維持",
+      "detail": "st.rockTarget(デフォ8) を導入し、開始時に岩を目標数まで生成。dsStep 内の岩処理をガードして二重更新を防ぎ、増殖ロジック（rockAcc/rockCap/while spawn）を無効化。"
+    }
+  ],
+  "touched_files": [
+    "app.js",
+    "202602021600_dotstrike_patch_notes.json"
+  ],
+  "touched_functions_or_blocks": [
+    "dsStartNewRun()  // rockTarget追加 + 初期岩生成",
+    "dsStep(dt)       // st.__rocksDone 追加 + 岩処理の一定数維持 + 二重処理ガード",
+    "dsDropPowerup(x,y,isBoss)  // drop chance に dsDropTimeMul() 追加",
+    "dsSpawnEnemy()   // dsEnemyHpMul() によるHP強化",
+    "dsShowGameOverCarry(lastCarry, carryN, bossKillsRun)  // 表示変更",
+    "GameOver処理(引き継ぎ抽選)  // carryN=三角数に変更"
+  ],
+  "why_this_fix": [
+    "岩が増える要因が dsStep 内に複数の岩スポーン処理として残っていたため、二重更新や増殖が起きやすかった。ガードと一定数維持に統一して先祖帰りを防止。",
+    "敵数増加に対してドロップ率を固定すると、時間あたりのアイテム獲得が増え続けてしまうため、difベースでドロップ率を減衰。",
+    "敵HPが低いままだと後半が作業になりやすいので、時間/難易度に応じて控えめに増幅。"
+  ],
+  "checks_for_no_regression": [
+    "スタート直後に岩が target 数だけ存在し、時間経過で増えない（目視 + consoleで st.rocks.length を確認）。",
+    "岩の挙動（押し上げ・wrap）が二重適用されず、速度が不自然に上がっていない。",
+    "敵撃破ドロップが序盤は従来の体感、後半は徐々に減る（clutch中でも過剰に増えない）。",
+    "ボス撃破数1,2,3...で GameOver の PERMA CARRY 表示が 1,3,6... と増える。",
+    "SyntaxError/ReferenceError が出ない（Safari/Chromeコンソール確認）。"
+  ],
+  "assistant_self_checklist": [
+    "修正対象は『ユーザーが最後に添付したzip/ファイル』のみをベースにする（古い版に戻らない）。",
+    "dotstrike の岩処理が dsStep 内で二重に走っていないか（__rocksDone ガード）。",
+    "drop rate の倍率は clamp で 0..1 に収まり、Math.random 比較が逆になっていないか。",
+    "HP倍率で e.hp が0以下にならない（Math.max(1,...)）。",
+    "GameOver で carryN と bossKills の引数順が一致しているか（表示と抽選数）。",
+    "zip作成前に app.js の構文チェック（new Function(code)）を通す。"
+  ]
+}
